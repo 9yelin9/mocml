@@ -174,7 +174,7 @@ class Data:
         t1 = timer()
         print('GenDOS(%s) : %fs' % (path_save, t1-t0))
 
-    def GenLE(self, path_dos):
+    def GenLE(self, path_dos, dir_data):
         path_save   = re.sub('dos', 'le', path_dos)
         path_energy = '/'.join(['data', 'energy_Ne%d.dat' % (Ne if re.search('hf', dir_data) else config.Ne_max)])
         
@@ -182,7 +182,7 @@ class Data:
             header = re.sub('# ', '', f.readline().strip())
             dos    = np.genfromtxt(f, delimiter=',')
         with open(path_energy, 'r') as f:
-              energy = np.genfromtxt(f)
+            energy = np.genfromtxt(f)
         energy_max = np.max(np.abs(energy))
 
         t0 = timer()

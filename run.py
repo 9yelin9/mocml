@@ -16,7 +16,7 @@ parser.add_argument('-p', '--peak',      type=str, nargs='+', help='* Only DOS w
 parser.add_argument('-cd', '--checkdos', type=str, nargs='+', help='<path_dos> [verbose=t/f] : CheckDOS')
 parser.add_argument('-sd', '--showdos',  type=str, nargs='+', help='<path_dos> [idx=10] : ShowDOS')
 # model
-parser.add_argument('-pr', '--predict',   type=str, nargs='+', help='<path_train> <path_test> <mc> [ratio=0.3] [verbose=t/f] : Predict')
+parser.add_argument('-pr', '--predict',  type=str, nargs='+', help='<path_train> <path_test> <mc> [ratio=0.3] [verbose=t/f] : Predict')
 args = parser.parse_args()                                                                     
 
 d, m = data.Data(), model.Model()

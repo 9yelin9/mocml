@@ -39,6 +39,8 @@ class Model:
 		return df, X, y
 
 	def Predict(self, path_train, path_test, mc, ratio=0.3, verbose='t'):
+		ratio = float(ratio)
+
 		mc_dict = {
 			'rf':   RandomForestClassifier(random_state=config.random_state, n_jobs=config.num_thread),
 			'xgb':  XGBClassifier(random_state=config.random_state, nthread=config.num_thread),
@@ -65,19 +67,21 @@ class Model:
 		y_pred  = mc_dict[mc].predict(X_test)
 		y_score = mc_dict[mc].predict_proba(X_test)
 
-		if ohe: y_test, y_pred = y_test.values.argmax(axis=1), y_pred.argmax(axis=1)
+		if ohe:
+			y_test = [list(config.type_dict)[i] for i in y_test.values.argmax(axis=1)]
+			y_pred = [list(config.type_dict)[i] for i in y_pred.argmax(axis=1)]
 
 		acc = accuracy_score(y_test, y_pred)
 		cm = confusion_matrix(y_test, y_pred)
 
 		if verbose == 't':
-			print()
-			print('# Trainset : %s' % path_train, X_train.shape)
+			print('\n# Trainset : %s' % path_train, X_train.shape)
 			print('# Testset  : %s' % path_test, X_test.shape)
 			print('# Machine  : %s' % mc)
 			print('# Accuracy : %f' % acc)
-			print(cm)
-			print()
+			print(cm, end='\n')
 
 		t1 = timer()
-		print('Predict : %fs' % (t1-t0))
+		print('Predict(%s) : %fs' % (mc, t1-t0))
+
+		return y_test, y_pred

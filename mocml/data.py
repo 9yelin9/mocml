@@ -138,7 +138,6 @@ class Data:
 
 			dosi = np.array([itp(energy) for itp in itp_list])
 			ddosi = np.diff(dosi) > 0 # boolean
-			print(dosi.shape)
 
 			gap = []
 			for ddosij in ddosi:
@@ -313,4 +312,5 @@ class Data:
 		fig.suptitle(pmA + pmB)	
 		fig.supxlabel('DOS')
 		fig.supylabel('Energy')
+		fig.savefig('figs/%s.png' % ('_'.join([re.sub('.csv', '', re.sub('/', '_', path_dos)), 'idx%d' % idx])))
 		plt.show()

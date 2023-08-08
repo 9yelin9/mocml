@@ -1,7 +1,7 @@
+from . import config
+
 import re
 import numpy as np
-
-from . import config
 
 def GetPm(pm, string):
 	return float(re.sub(pm, '', re.search('%s[-]?\d+[.]\d+' % pm, string).group()))

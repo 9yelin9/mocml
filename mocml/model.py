@@ -1,8 +1,6 @@
-import os
-num_thread = 16
-os.environ['OMP_NUM_THREADS'] = str(num_thread)
-os.environ['OPENBLAS_NUM_THREADS'] = str(num_thread)
+from . import config, util
 
+import os
 import re
 import sys
 import argparse
@@ -27,8 +25,6 @@ from lightgbm import LGBMClassifier
 from catboost import CatBoostClassifier	
 from sklearn.svm import SVC
 
-from . import config, util
-
 class Model:
 	def ReadData(self, path_data):
 		with open(path_data, 'r') as f:
@@ -44,11 +40,11 @@ class Model:
 
 	def Predict(self, path_train, path_test, mc, ratio=0.3, verbose='t'):
 		mc_dict = {
-			'rf':   RandomForestClassifier(random_state=config.random_state, n_jobs=num_thread),
-			'xgb':  XGBClassifier(random_state=config.random_state, nthread=num_thread),
-			'lgbm': LGBMClassifier(random_state=config.random_state, n_jobs=num_thread, objective='multiclass', num_class=len(config.type_dict)),
-			'cat':  CatBoostClassifier(random_state=config.random_state, thread_count=num_thread, silent=True, allow_writing_files=False),
-			'lr':   LogisticRegression(random_state=config.random_state, n_jobs=num_thread, solver='sag', max_iter=100000),
+			'rf':   RandomForestClassifier(random_state=config.random_state, n_jobs=config.num_thread),
+			'xgb':  XGBClassifier(random_state=config.random_state, nthread=config.num_thread),
+			'lgbm': LGBMClassifier(random_state=config.random_state, n_jobs=config.num_thread, objective='multiclass', num_class=len(config.type_dict)),
+			'cat':  CatBoostClassifier(random_state=config.random_state, thread_count=config.num_thread, silent=True, allow_writing_files=False),
+			'lr':   LogisticRegression(random_state=config.random_state, n_jobs=config.num_thread, solver='sag', max_iter=100000),
 			'svm':  SVC(random_state=config.random_state, probability=True),
 		}
 		ohe = True if mc in ['xgb'] else False # one-hot encoding

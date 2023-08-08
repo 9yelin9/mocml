@@ -1,3 +1,5 @@
+from . import config, util
+
 import os
 import re
 import sys
@@ -7,10 +9,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from glob import glob
+from scipy import interpolate
 from timeit import default_timer as timer
 from sklearn.model_selection import train_test_split
-
-from . import config, util
 
 class Data:
 	def GenEnergy(self, Ne):
@@ -71,9 +72,29 @@ class Data:
 
 		return [f_list[i] for i in grds]
 
-	def DOSH(self, dir_data, Ne, energy, eta):
+	def GetEta(self, eta, energy, options):
+		energy_max = np.max(np.abs(energy))
+
+		opts_dict = {
+			'n': np.ones(len(energy)),
+			'f': np.array([0 if e > 0 else 1 for e in energy]),
+			'l': np.array([np.abs(e/energy_max) for e in energy]),
+			'r': np.random.rand(len(energy)),
+		}
+		opts_list = [opts_dict[opt] for opt in options]
+		eta = eta * np.multiply.reduce(opts_list)
+
+		return eta
+
+	def DOSH(self, dir_data, Ne, energy, eta, is_spec=False):
 		path, Nb, k_label, k_point = self.ReadConfig(dir_data)
-		dos_list = ['%s%d' % (l, i) for l in k_label for i in range(Ne)]
+
+		if is_spec:
+			k_label = ['K%d' % i for i in range(k_point[-1]+1)]
+			k_point = range(k_point[-1]+1)
+			dos_list = ['%s_%d' % (l, i) for l in k_label for i in range(Ne)]
+		else:
+			dos_list = ['%s%d' % (l, i) for l in k_label for i in range(Ne)]
 
 		energy_c = np.ctypeslib.as_ctypes(energy)
 		eta_c    = np.ctypeslib.as_ctypes(eta)
@@ -105,19 +126,31 @@ class Data:
 	def DOSD(self, dir_data, Ne, energy, eta):
 		path, Nb, k_label, k_point = self.ReadConfig(dir_data)
 		dos_list = ['%s%d' % (l, i) for l in k_label for i in range(Ne)]
-
 		fermi_idx = np.min(np.where(energy > 0))
 
-		i, pm, dos = 0, np.zeros(len(config.pm_list)), np.zeros(len(k_point) * config.Ne_max)
-		for f in [f for f in glob(path) if float(re.sub('UF', '', re.search('UF\d[.]\d+', f).group())) > 5 and re.search('ep%.2f' % eta[-1], f)]:
-			dosi = np.array([np.genfromtxt(re.sub('_kG_', '_k%s_' % l, f))[:, 1] * 6 for l in k_label])
-			ddosi = np.diff(dosi) > 0 # boolean
+		i, pm, dos = 0, np.zeros(len(config.pm_list)), np.zeros(len(k_point) * Ne)
+		for f in [f for f in glob(path) if re.search('ep%.2f' % eta[-1], f)]:
+			itp_list = []
+			for fl in [re.sub('_kG_', '_k%s_' % l, f) for l in k_label]:
+				fl_eng = np.genfromtxt(fl)[:, 0]
+				fl_dos = np.genfromtxt(fl)[:, 1] * 6
+				itp_list.append(interpolate.interp1d(fl_eng, fl_dos, fill_value='extrapolate'))
 
+			dosi = np.array([itp(energy) for itp in itp_list])
+			ddosi = np.diff(dosi) > 0 # boolean
+			print(dosi.shape)
+
+			gap = []
 			for ddosij in ddosi:
-				peak = [j+1 for j in range(len(ddosij)-1) if ddosij[j] and not ddosij[j+1]]
-				peak_pos = np.min([i for i in peak if i > fermi_idx])
-				peak_neg = np.max([i for i in peak if i < fermi_idx])
-				gap = energy[peak_pos] - energy[peak_neg]
+				peak_all = [j+1 for j in range(len(ddosij)-1) if ddosij[j] and not ddosij[j+1]]
+
+				peak_pos = [i for i in peak_all if i > fermi_idx]
+				peak_pos = np.min(peak_pos) if len(peak_pos) else 999
+
+				peak_neg = [i for i in peak_all if i < fermi_idx]
+				peak_neg = np.max(peak_neg) if len(peak_neg) else -999
+
+				gap += [energy[peak_pos] - energy[peak_neg]]
 
 			pm_dict = util.PmDictD(f)
 			pm_dict['gap'] = np.min(gap)
@@ -127,13 +160,13 @@ class Data:
 			i += 1
 		pm, dos = np.delete(pm, 0, 0), np.delete(dos, 0, 0)
 
-		if Ne < config.Ne_max: dos = np.add.reduceat(dos, range(0, dos.shape[1], config.Ne_max//Ne), 1)
+		#if Ne < config.Ne_max: dos = np.add.reduceat(dos, range(0, dos.shape[1], config.Ne_max//Ne), 1)
 
 		return pm, dos, dos_list
 
-	def GenDOS(self, dir_data, Ne, eta, cstrs='n', options='n'):
+	def GenDOS(self, dir_data, Ne, eta, options='n', cstrs='n'):
 		Ne, eta = int(Ne), float(eta)
-		Ne_energy, DOS = (Ne, self.DOSH) if re.search('hf', dir_data) else (config.Ne_max, self.DOSD)
+		DOS = self.DOSH if re.search('hf', dir_data) else self.DOSD
 
 		cstrs_dict = {
 			'n': -1,
@@ -143,20 +176,11 @@ class Data:
 		cstrs_str = '_%s%.2f' % (cstrs, cstrs_dict[cstrs]) if cstrs_dict[cstrs] > 0 else ''
 
 		path_save   = '/'.join(['data', dir_data, 'dos_%s_Ne%d_eta%.2f%s.csv' % (''.join(options), Ne, eta, cstrs_str)])
-		path_energy = '/'.join(['data', 'energy_Ne%d.dat' % Ne_energy])
+		path_energy = '/'.join(['data', 'energy_Ne%d.dat' % Ne])
 		
-		if not os.path.isfile(path_energy): self.GenEnergy(Ne_energy)
+		if not os.path.isfile(path_energy): self.GenEnergy(Ne)
 		with open(path_energy, 'r') as f: energy = np.genfromtxt(f)
-		energy_max = np.max(np.abs(energy))
-
-		opts_dict = {
-			'n': np.ones(len(energy)),
-			'f': np.array([0 if e > 0 else 1 for e in energy]),
-			'l': np.array([np.abs(e/energy_max) for e in energy]),
-			'r': np.random.rand(len(energy)),
-		}
-		opts_list = [opts_dict[opt] for opt in options]
-		eta = eta * np.multiply.reduce(opts_list)
+		eta = self.GetEta(eta, energy, options)
 
 		t0 = timer()
 
@@ -176,17 +200,63 @@ class Data:
 		t1 = timer()
 		print('GenDOS(%s) : %fs' % (path_save, t1-t0))
 
-	def GenLE(self, path_dos):
-		path_save   = re.sub('dos', 'le', path_dos)
-		path_energy = '/'.join(['data', 'energy_Ne%d.dat' % (Ne if re.search('hf', dir_data) else config.Ne_max)])
+	def GenSpec(self, Ne, eta, options='n'):
+		dir_data, Ne, eta = 'hf', int(Ne), float(eta)
+
+		path_save   = '/'.join(['data', dir_data, 'spec_%s_Ne%d_eta%.2f.csv' % (''.join(options), Ne, eta)])
+		path_energy = '/'.join(['data', 'energy_Ne%d.dat' % Ne])
 		
-		with open(path_dos, 'r') as f: 
-			header = re.sub('# ', '', f.readline().strip())
-			dos    = np.genfromtxt(f, delimiter=',')
+		if not os.path.isfile(path_energy): self.GenEnergy(Ne)
 		with open(path_energy, 'r') as f: energy = np.genfromtxt(f)
-		energy_max = np.max(np.abs(energy))
+		eta = self.GetEta(eta, energy, options)
 
 		t0 = timer()
+
+		pm, dos, dos_list = self.DOSH(dir_data, Ne, energy, eta, is_spec=True)
+		print('DOS shape :', dos.shape)
+
+		np.savetxt(path_save, np.hstack((pm, dos)), fmt='%.10f', delimiter=',', header=','.join(config.pm_list + dos_list)) 
+
+		t1 = timer()
+		print('GenSpec(%s) : %fs' % (path_save, t1-t0))
+
+	def GenPeak(self, path_dos):
+		_, _, k_label, k_point = self.ReadConfig(path_dos.split('/')[1])
+		peak_list = ['%s%s' % (l, s) for l in k_label for s in ['p', 'n']]
+		Ne = int(re.sub('_Ne', '', re.search('_Ne\d+', path_dos).group()))
+
+		path_save   = re.sub('dos', 'peak', path_dos)
+		path_energy = '/'.join(['data', 'energy_Ne%d.dat' % Ne])
+
+		with open(path_energy, 'r') as f: energy = np.genfromtxt(f)
+		with open(path_dos, 'r') as f: dos = np.genfromtxt(f, skip_header=1, delimiter=',')
+		fermi_idx = np.min(np.where(energy > 0))
+		pm = dos[:, :len(config.pm_list)]
+		dos = dos[:, len(config.pm_list):]
+
+		t0 = timer()
+		
+		peak = np.zeros(len(peak_list))
+		for dosi in dos:
+			dosi = np.reshape(dosi, (len(k_point), Ne))
+			ddosi = np.diff(dosi) > 0 # boolean
+
+			peaki = []
+			for ddosij in ddosi:
+				peak_all = [j+1 for j in range(len(ddosij)-1) if ddosij[j] and not ddosij[j+1]]
+
+				peak_pos = [i for i in peak_all if i > fermi_idx]
+				peak_pos = np.min(peak_pos) if len(peak_pos) else 999
+
+				peak_neg = [i for i in peak_all if i < fermi_idx]
+				peak_neg = np.max(peak_neg) if len(peak_neg) else -999
+
+				peaki += [peak_pos, peak_neg]
+			peak = np.vstack((peak, peaki))
+		peak = np.delete(peak, 0, 0)
+
+		np.savetxt(path_save, np.hstack((pm, peak)), fmt='%.10f', delimiter=',', header=','.join(config.pm_list + peak_list))
+
 		t1 = timer()
 		print('GenLE(%s) : %fs' % (path_save, t1-t0))
 	
@@ -199,7 +269,7 @@ class Data:
 		with open(path_energy, 'r') as f: energy = np.genfromtxt(f)
 		de = energy[1] - energy[0]
 
-		with open(path_dos, 'r') as f: dos = np.genfromtxt(f, delimiter=',')
+		with open(path_dos, 'r') as f: dos = np.genfromtxt(f, skip_header=1, delimiter=',')
 		pm = dos[:, :len(config.pm_list)]
 
 		dos = dos[:, len(config.pm_list):] * de
@@ -207,11 +277,12 @@ class Data:
 		if verbose == 't': print(dos_sum)
 		print('DOS sum shape :', dos_sum.shape, '\n')
 
-		dft_tol = 3
-		dft_idx = np.unique(np.where(dos_sum < dft_tol)[0])
+		dft_tol_min, dft_tol_max = 5, 7
+		dft_idx = np.unique(np.where((dos_sum < dft_tol_min) | (dos_sum > dft_tol_max))[0])
 		df = pd.DataFrame(np.hstack((pm[dft_idx, :], dos_sum[dft_idx, :])), columns=config.pm_list+k_label)
 		df = df.astype({'idx':'int', 'type':'int'})
-		print('Defacted DOS list (tol = %.3f):' % dft_tol)
+		df = df.set_index('idx')
+		print('Defacted DOS list (tol < %.3f | tol > %.3f):' % (dft_tol_min, dft_tol_max))
 		print(df)
 
 	def ShowDOS(self, path_dos, idx=10):
@@ -223,13 +294,14 @@ class Data:
 		path_energy = '/'.join(['data', 'energy_Ne%s.dat' % Ne])
 
 		with open(path_energy, 'r') as f: energy = np.genfromtxt(f)
-		with open(path_dos, 'r') as f: dos = np.genfromtxt(f, delimiter=',')
+		with open(path_dos, 'r') as f: dos = np.genfromtxt(f, skip_header=1, delimiter=',')
+		idx_new = np.where(np.abs(dos[:, 0] - idx) < 1e-6)[0][0]
 
-		pm = dos[idx, :len(config.pm_list)]
+		pm = dos[idx_new, :len(config.pm_list)]
 		pmA = ' '.join(['%s %.1f' % (config.pm_list[i], pm[i]) for i in range(5)]) + '\n'
 		pmB = ' '.join(['%s %.3f' % (config.pm_list[i], pm[i]) for i in range(5, len(pm))])
 
-		dos = dos[idx, len(config.pm_list):]
+		dos = dos[idx_new, len(config.pm_list):]
 		doss = np.split(dos, len(k_point))
 		
 		fig, axes = plt.subplots(1, len(k_point))

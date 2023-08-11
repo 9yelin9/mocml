@@ -106,7 +106,7 @@ class Data:
 			pm_dict = util.PmDictH(f)
 
 			if pm_dict['gap'] > config.gap_tol:
-				fermi_list = np.linspace(-pm_dict['gap']/2, pm_dict['gap']/2, config.fermi_itv)		
+				fermi_list = np.arange(-pm_dict['gap']/2, pm_dict['gap']/2, config.fermi_itv)		
 			else: fermi_list = [0]
 
 			for fermi in fermi_list:
@@ -121,6 +121,42 @@ class Data:
 		b2d.Band2DOS(len(k_point), Nb, Ne, len(band), band_c, energy_c, eta_c, dos_c)
 		dos = np.reshape(np.ctypeslib.as_array(dos_c), (len(band), len(k_point)*Ne))
 		
+		return pm, dos, dos_list
+
+	def DOSD_old(self, dir_data, Ne, energy, eta):
+		path, Nb, k_label, k_point = self.ReadConfig(dir_data)
+		dos_list = ['%s%d' % (l, i) for l in k_label for i in range(Ne)]
+		fermi_idx = np.min(np.where(energy > 0))
+
+		i, pm, dos = 0, np.zeros(len(config.pm_list)), np.zeros(len(k_point) * config.Ne_max)
+		for f in [f for f in glob(path) if re.search('ep%.2f' % eta[-1], f)]:
+			dosi = [np.genfromtxt(re.sub('_kG_', '_k%s_' % l, f))[:, 1] * 6 for l in k_label]
+			ddosi = np.diff(dosi) > 0 # boolean
+
+			gap = []
+			for ddosij in ddosi:
+				peak_all = [j+1 for j in range(len(ddosij)-1) if ddosij[j] and not ddosij[j+1]]
+
+				peak_pos = [i for i in peak_all if i > fermi_idx]
+				peak_pos = np.min(peak_pos) if len(peak_pos) else 999
+
+				peak_neg = [i for i in peak_all if i < fermi_idx]
+				peak_neg = np.max(peak_neg) if len(peak_neg) else -999
+
+				gap += [energy[peak_pos] - energy[peak_neg]]
+
+			pm_dict = util.PmDictD(f)
+			pm_dict['gap'] = np.min(gap)
+
+			pm  = np.vstack((pm, [i] + list(pm_dict.values())))
+			dos = np.vstack((dos, np.ravel(dosi)))
+			i += 1
+		pm, dos = np.delete(pm, 0, 0), np.delete(dos, 0, 0)
+
+		if Ne < config.Ne_max:
+			de = energy[config.Ne_max//Ne] - energy[0]
+			dos = np.add.reduceat(dos*de, range(0, dos.shape[1], config.Ne_max//Ne), 1)
+
 		return pm, dos, dos_list
 
 	def DOSD(self, dir_data, Ne, energy, eta):
@@ -159,13 +195,15 @@ class Data:
 			i += 1
 		pm, dos = np.delete(pm, 0, 0), np.delete(dos, 0, 0)
 
-		#if Ne < config.Ne_max: dos = np.add.reduceat(dos, range(0, dos.shape[1], config.Ne_max//Ne), 1)
-
 		return pm, dos, dos_list
 
 	def GenDOS(self, dir_data, Ne, eta, options='n', cstrs='n'):
 		Ne, eta = int(Ne), float(eta)
-		DOS = self.DOSH if re.search('hf', dir_data) else self.DOSD
+		Ne_energy = config.Ne_max if re.search('dmft.old', dir_data) else Ne
+
+		if re.search('hf', dir_data): DOS = self.DOSH
+		elif re.search('dmft_old', dir_data): DOS = self.DOSD_old
+		else: DOS = self.DOSD
 
 		cstrs_dict = {
 			'n': -1,
@@ -175,9 +213,9 @@ class Data:
 		cstrs_str = '_%s%.2f' % (cstrs, cstrs_dict[cstrs]) if cstrs_dict[cstrs] > 0 else ''
 
 		path_save   = '/'.join(['data', dir_data, 'dos_%s_Ne%d_eta%.2f%s.csv' % (''.join(options), Ne, eta, cstrs_str)])
-		path_energy = '/'.join(['data', 'energy_Ne%d.dat' % Ne])
+		path_energy = '/'.join(['data', 'energy_Ne%d.dat' % Ne_energy])
 		
-		if not os.path.isfile(path_energy): self.GenEnergy(Ne)
+		if not os.path.isfile(path_energy): self.GenEnergy(Ne_energy)
 		with open(path_energy, 'r') as f: energy = np.genfromtxt(f)
 		eta = self.GetEta(eta, energy, options)
 
@@ -189,8 +227,8 @@ class Data:
 		print('%d' % len(pm), end=' -> ')
 		idx = np.array(range(len(pm)))
 		if cstrs_dict[cstrs] > 0:
-			idx_new = np.where(pm[:, config.pm_list.index(cstrs)] > cstrs_dict[cstrs])[0]
-			idx = np.intersect1d(idx, idx_new)
+			idx = np.where(pm[:, config.pm_list.index(cstrs)] > cstrs_dict[cstrs])[0]
+			idx = np.intersect1d(idx, idx)
 		pm, dos = pm[idx, :], dos[idx, :]
 		print('(%s)%d' % (cstrs, len(pm)))
 
@@ -257,7 +295,7 @@ class Data:
 		np.savetxt(path_save, np.hstack((pm, peak)), fmt='%.10f', delimiter=',', header=','.join(config.pm_list + peak_list))
 
 		t1 = timer()
-		print('GenLE(%s) : %fs' % (path_save, t1-t0))
+		print('GenPeak(%s) : %fs' % (path_save, t1-t0))
 	
 	def CheckDOS(self, path_dos, verbose='t'):
 		_, _, k_label, k_point = self.ReadConfig(path_dos.split('/')[1])
@@ -284,33 +322,56 @@ class Data:
 		print('Defacted DOS list (tol < %.3f | tol > %.3f):' % (dft_tol_min, dft_tol_max))
 		print(df)
 
-	def ShowDOS(self, path_dos, idx=10):
+	def ShowDOS(self, path_dos, idx=-1, axes=[]):
 		idx = int(idx)
+		data_type = re.sub('data/', '', re.search('data/[a-z_]+/', path_dos).group())
 
 		_, _, k_label, k_point = self.ReadConfig(path_dos.split('/')[1])
 		Ne = int(re.sub('Ne', '', re.search('Ne\d+', path_dos).group()))
 
 		path_energy = '/'.join(['data', 'energy_Ne%s.dat' % Ne])
+		path_peak = re.sub('dos', 'peak', path_dos)
 
 		with open(path_energy, 'r') as f: energy = np.genfromtxt(f)
 		with open(path_dos, 'r') as f: dos = np.genfromtxt(f, skip_header=1, delimiter=',')
-		idx_new = np.where(np.abs(dos[:, 0] - idx) < 1e-6)[0][0]
 
-		pm = dos[idx_new, :len(config.pm_list)]
+		if idx < 0:
+			print('Random Idx')
+			idx = np.random.randint(len(dos))
+		else: idx = np.where(np.abs(dos[:, 0] - idx) < 1e-6)[0][0]
+
+		if os.path.isfile(path_peak):
+			with open(path_peak, 'r') as f: peak = np.genfromtxt(f, skip_header=1, delimiter=',')
+			peak = peak[idx, len(config.pm_list):].astype(int)
+			peaks = np.split(peak, len(k_point))
+		else:
+			print('No Peak')
+			peaks = np.zeros((len(k_point), 2)).astype(int)
+
+		pm = dos[idx, :len(config.pm_list)]
 		pmA = ' '.join(['%s %.1f' % (config.pm_list[i], pm[i]) for i in range(5)]) + '\n'
 		pmB = ' '.join(['%s %.3f' % (config.pm_list[i], pm[i]) for i in range(5, len(pm))])
 
-		dos = dos[idx_new, len(config.pm_list):]
+		dos = dos[idx, len(config.pm_list):]
 		doss = np.split(dos, len(k_point))
-		
-		fig, axes = plt.subplots(1, len(k_point))
+
+		show = False
+		if not len(axes):
+			show = True
+			fig, axes = plt.subplots(1, len(k_point))
+
 		for i, ax in enumerate(axes):
-			ax.plot(doss[i], energy, label=k_label[i])
+			ax.plot(doss[i], energy, label=data_type+k_label[i])
+			ax.scatter(np.array(doss[i])[peaks[i]], energy[peaks[i]], s=35, alpha=0.6)
 			ax.axhline(y=0, ls='--', color='gray')
-			ax.legend()
+			ax.legend(handlelength=0.5, handletextpad=0.1)
 			if i: ax.get_yaxis().set_visible(False)
-		fig.suptitle(pmA + pmB)	
-		fig.supxlabel('DOS')
-		fig.supylabel('Energy')
-		fig.savefig('figs/%s.png' % ('_'.join([re.sub('.csv', '', re.sub('/', '_', path_dos)), 'idx%d' % idx])))
-		plt.show()
+
+		if show:
+			fig.suptitle(pmA + pmB)	
+			fig.supxlabel('DOS')
+			fig.supylabel('Energy')
+			fig.savefig('figs/%s.png' % ('_'.join([re.sub('.csv', '', re.sub('/', '_', path_dos)), 'idx%d' % idx])))
+			plt.show()
+
+		return axes

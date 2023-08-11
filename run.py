@@ -10,7 +10,7 @@ os.environ['OPENBLAS_NUM_THREADS'] = str(num_thread)
 import argparse
 parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
 # data
-parser.add_argument('-d', '--dos',       type=str, nargs='+', help='<hf/dmft> <Ne> <eta> [opts:f,l,r] [cstrs:m,gap] : GenDOS')
+parser.add_argument('-d', '--dos',       type=str, nargs='+', help='<hf/dmft/dmft_old> <Ne> <eta> [opts:f,l,r] [cstrs:m,gap] : GenDOS')
 parser.add_argument('-s', '--spec',      type=str, nargs='+', help='* Only HF\n<Ne> <eta> [opts:f,l,r] : GenSpec')
 parser.add_argument('-p', '--peak',      type=str, nargs='+', help='* Only DOS with gap\n<path_dos> : GenPeak')
 parser.add_argument('-cd', '--checkdos', type=str, nargs='+', help='<path_dos> [verbose=t/f] : CheckDOS')
